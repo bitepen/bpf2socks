@@ -15,9 +15,38 @@ jobs:
         with:
           ndk-version: r26b
 
-      - name: Build Binary
+      - name: Generate Embedded BPF Object
         run: |
-          make android ABI=arm64-v8a
+          TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64
+          SYSROOT=$TOOLCHAIN/sysroot
+
+          # 1. 使用 NDK Clang 并挂载 sysroot 编译 eBPF 字节码
+          $TOOLCHAIN/bin/clang \
+            -target bpf -O2 -g \
+            -D__TARGET_ARCH_arm64 \
+            -I. \
+            -isystem $SYSROOT/usr/include \
+            -isystem $SYSROOT/usr/include/aarch64-linux-android \
+            -c tc_redirect.bpf.c -o tc_redirect.bpf.o
+
+          # 2. 用 Python 转换为 C 字节数组源码
+          python3 -c '
+          with open("tc_redirect.bpf.o", "rb") as f:
+              data = f.read()
+
+          with open("bpf_embedded.c", "w") as f:
+              f.write("#include <stddef.h>\n#include <stdint.h>\n\n")
+              f.write("const uint8_t bpf2socks_embedded_bpf_object[] = {\n")
+              for i, b in enumerate(data):
+                  f.write(f"0x{b:02x}, ")
+                  if (i + 1) % 16 == 0:
+                      f.write("\n")
+              f.write("\n};\n\n")
+              f.write("const size_t bpf2socks_embedded_bpf_object_size = sizeof(bpf2socks_embedded_bpf_object);\n")
+          '
+
+      - name: Build Android Binary
+        run: make android ABI=arm64-v8a
 
       - name: Upload Output
         uses: actions/upload-artifact@v4
